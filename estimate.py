@@ -70,15 +70,38 @@ def grid_positions(neighbors, directions):
                         print(index, result[index], "->", n, result[index] + step, "!=", result[n,:])
     return result
 
+def calibrate(img):
+    imgpoints = find_corners(img)
+    directions = np.array([[-1, 0], [1, 0], [0, -1], [0, 1]])
+    neighbors = grid_match(imgpoints, directions.shape[0])
+    order_cross(neighbors)
+    objpoints = grid_positions(neighbors, directions)
+    objpoints = np.hstack((objpoints, np.zeros((len(objpoints),1), np.float32))).astype(np.float32)
+    shape = (img.shape[1], img.shape[0])
+    ret, mtx, dist, rvecs, tvecs = cv2.calibrateCamera([objpoints], [imgpoints], shape, None, None)
+    newmtx, roi = cv2.getOptimalNewCameraMatrix(mtx, dist, shape, 1, shape)
+    return dist, mtx, newmtx
+
 fname = argv[1]
 img = cv2.imread(fname)
-points = find_corners(img)
-directions = np.array([[-1, 0], [1, 0], [0, -1], [0, 1]])
-neighbors = grid_match(points, directions.shape[0])
-order_cross(neighbors)
-labels = grid_positions(neighbors, directions)
-for (x, y), (i, j) in zip(points, labels):
-    cv2.putText(img, f"{i}, {j}", (round(x), round(y)), cv2.FONT_HERSHEY_PLAIN, 1, (100, 150, 250))
+dist, mtx, newmtx = calibrate(img)
+mapx, mapy = cv2.initUndistortRectifyMap(mtx, dist, None, newmtx, (img.shape[1], img.shape[0]), 5)
+for fname in argv[2:]:
+    img = cv2.imread(fname)
+    if img.shape[0] > img.shape[1]:
+        img = cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
+    img = cv2.remap(img, mapx, mapy, cv2.INTER_LINEAR)
+    basename = fname.rsplit("/", 1)[1]
+    cv2.imwrite(f"undistorted/{basename}", img)
+
+# print(mtx)
+# print(dist)
+# dist = 2 * dist[0,:] / min(shape)
+# print(f'-fx "ii = i - $cx; jj = j - $cy; xx = $cos*ii +$sin*jj + $cx; yy = -$sin*ii +$cos*jj + $cy; v.p{{xx,yy}}"')
+# print(f'-distort Barrel "{dist[4]} {dist[1]} {dist[0]} 1.0"')
+
+# for (x, y), (i, j, _) in zip(imgpoints, objpoints):
+    # cv2.putText(img, f"{i}, {j}", (round(x), round(y)), cv2.FONT_HERSHEY_PLAIN, 1, (100, 150, 250))
 
 # for x, y in centroids:
     # cv2.circle(img, (round(x), round(y)), scale//3, (50, 50, 200))
@@ -90,29 +113,5 @@ for (x, y), (i, j) in zip(points, labels):
 
 # img[:-1,:-1,1] += (500*gray).astype(np.uint8)
 
-if False:
-    h, w = 8,8
-    
-    # prepare object points, like (0,0,0), (1,0,0), (2,0,0) ....,(6,5,0)
-    objp = np.zeros((h*w,3), np.float32)
-    objp[:,:2] = np.mgrid[0:h,0:w].T.reshape(-1,2)
-    
-    # Arrays to store object points and image points from all the images.
-    objpoints = [] # 3d point in real world space
-    imgpoints = [] # 2d points in image plane.
-    
-    # Find the chess board corners
-    ret, corners = cv2.findChessboardCorners(gray, (h, w), None)
-    
-    # If found, add object points, image points (after refining them)
-    if ret == True:
-        objpoints.append(objp)
-    
-        # termination criteria
-        imgpoints.append(corners2)
-    
-        # Draw and display the corners
-        img = cv2.drawChessboardCorners(img, (h, w), corners2, ret)
-
-cv2.imshow('img', img)
-cv2.waitKey(0)
+# cv2.imshow('img', img)
+# cv2.waitKey(0)
