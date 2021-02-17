@@ -18,20 +18,26 @@ def find_corners(img):
 def grid_match(points, directions=4):
     flann = cv2.flann_Index()
     flann.build(points, {'algorithm': 1, 'trees': 1})
-    guess = 42
-    origin = points[guess:guess+1,:]
-    # last row in the neighbors array represents a "no match" point
-    neighbors = -np.ones((points.shape[0] + 1, directions), np.int32)
-    for i, n in enumerate(flann.knnSearch(origin, directions+1)[0].T, -1):
-        if i >= 0:
+    best_score = 0
+    best_result = None
+    for guess in range(len(points)):
+        origin = points[guess:guess+1,:]
+        # last row in the result array represents a "no match" point
+        result = -np.ones((points.shape[0] + 1, directions), np.int32)
+        score = 0
+        for i, n in enumerate(flann.knnSearch(origin, directions+1)[0].T[1:]):
+            if n == guess:
+                score = -float("inf")
             target = points[n]
-            # print("shift by", target - origin)
             shifted = points + (target - origin)
             indices, distances = flann.knnSearch(shifted, 1)
             indices[distances > scale**2] = -1
-            neighbors[indices[:,0], i] = np.arange(len(indices))
-            # print("match score:", sum(distances < scale**2))
-    return neighbors
+            result[indices[:,0], i] = np.arange(len(indices))
+            score += sum(distances < scale**2)
+        score -= sum(sum(result[:,i] == result[:,j]) for i in range(1,4) for j in range(i))
+        if score > best_score:
+            best_score, best_result = score, result
+    return best_result[:-1]
 
 def order_cross(indices):
     """indices: array(n, 4), each column are neighbor indices in a direction
@@ -46,20 +52,22 @@ def order_cross(indices):
 
 def grid_positions(neighbors, directions):
     result = np.zeros((neighbors.shape[0], directions.shape[1]), np.int32)
-    boundary = [0]
     visited = np.zeros((neighbors.shape[0],), np.bool)
-    while boundary:
-        index = boundary.pop()
-        for n, step in zip(neighbors[index,:], directions):
-            if n < 0:
-                continue
-            elif not visited[n]:
-                result[n,:] = result[index] + step
-                visited[n] = True
-                boundary.append(n)
-            else:
-                if not (result[n,:] == result[index] + step).all():
-                    print(index, result[index], "->", n, result[index] + step, "!=", result[n,:])
+    while not visited.all():
+        seed = next(i for i, v in enumerate(visited) if not v)
+        boundary = [seed]
+        while boundary:
+            index = boundary.pop()
+            visited[index] = True
+            for n, step in zip(neighbors[index,:], directions):
+                if n < 0:
+                    continue
+                elif not visited[n]:
+                    result[n,:] = result[index] + step
+                    boundary.append(n)
+                else:
+                    if not (result[n,:] == result[index] + step).all():
+                        print(index, result[index], "->", n, result[index] + step, "!=", result[n,:])
     return result
 
 fname = argv[1]
