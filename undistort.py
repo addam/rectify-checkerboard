@@ -1,7 +1,6 @@
 #!/bin/python3
 import numpy as np
 import cv2
-from sys import argv
 
 scale = 15
 
@@ -10,7 +9,7 @@ def find_corners(img):
     gray = cv2.cvtColor(img,cv2.COLOR_BGR2GRAY).astype(np.float32)
     gray = cv2.GaussianBlur(gray, (scale, scale), scale/5)
     gray = np.abs(np.diff(np.diff(gray), axis=0)) / 10
-    threshold = np.quantile(gray, 0.999)
+    threshold = np.quantile(gray, 0.998)
     mask = (gray > threshold).astype(np.uint8)
     retval, labels, stats, centroids = cv2.connectedComponentsWithStats(mask)
     # ignore 0-th component because it is the background
@@ -83,26 +82,44 @@ def grid_positions(neighbors, directions):
             best_score, best_result = score, result
     return best_result
 
-def calibrate(img):
+def calibrate(img, verbose=True):
     imgpoints = find_corners(img)
     directions = np.array([[-1, 0], [1, 0], [0, -1], [0, 1]])
     neighbors = grid_match(imgpoints, directions.shape[0])
     order_cross(neighbors)
     objpoints = grid_positions(neighbors, directions)
+    mask = (objpoints[:,0] >= 0)
+    imgpoints = imgpoints[mask,:]
+    objpoints = objpoints[mask,:]
+
+    if verbose:
+        for (x, y), (i, j) in zip(imgpoints, objpoints):
+            cv2.circle(img, (round(x), round(y)), 5, (50, 50, 200))
+            cv2.putText(img, f"{i}, {j}", (round(x), round(y)), cv2.FONT_HERSHEY_PLAIN, 1, (100, 150, 250))
+        cv2.imshow('img', img)
+        cv2.waitKey(1)
+
     objpoints = np.hstack((objpoints, np.zeros((len(objpoints),1), np.float32))).astype(np.float32)
     shape = (img.shape[1], img.shape[0])
     ret, mtx, dist, rvecs, tvecs = cv2.calibrateCamera([objpoints], [imgpoints], shape, None, None)
     newmtx, roi = cv2.getOptimalNewCameraMatrix(mtx, dist, shape, 1, shape)
     return dist, mtx, newmtx
 
-fname = argv[1]
-img = cv2.imread(fname)
-dist, mtx, newmtx = calibrate(img)
-mapx, mapy = cv2.initUndistortRectifyMap(mtx, dist, None, newmtx, (img.shape[1], img.shape[0]), 5)
-for fname in argv[2:]:
+if __name__ == "__main__":
+    from sys import argv
+    from pathlib import Path
+    fname = argv[1]
     img = cv2.imread(fname)
-    if img.shape[0] > img.shape[1]:
-        img = cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
-    img = cv2.remap(img, mapx, mapy, cv2.INTER_LINEAR)
-    basename = fname.rsplit("/", 1)[1]
-    cv2.imwrite(f"undistorted/{basename}", img)
+    dist, mtx, newmtx = calibrate(img)
+    print(dist)
+    print(mtx)
+    mapx, mapy = cv2.initUndistortRectifyMap(mtx, dist, None, newmtx, (img.shape[1], img.shape[0]), 5)
+    directory = Path("undistorted")
+    directory.mkdir(exist_ok=True)
+    for fname in argv[1:]:
+        img = cv2.imread(fname)
+        path = Path(fname)
+        if img.shape[0] > img.shape[1]:
+            img = cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
+        img = cv2.remap(img, mapx, mapy, cv2.INTER_LINEAR)
+        cv2.imwrite(str(directory / path.name), img)
