@@ -20,8 +20,7 @@ def grid_match(points, directions=4):
     """returns index to neighbors for each point in grid"""
     flann = cv2.flann_Index()
     flann.build(points, {'algorithm': 1, 'trees': 1})
-    best_score = 0
-    best_result = None
+    best_score, best_result = 0, None
     for guess in range(len(points)):
         origin = points[guess:guess+1,:]
         # last row in the result array represents a "no match" point
@@ -33,9 +32,9 @@ def grid_match(points, directions=4):
             target = points[n]
             shifted = points + (target - origin)
             indices, distances = flann.knnSearch(shifted, 1)
-            indices[distances > scale**2] = -1
+            indices[distances > scale] = -1
             result[indices[:,0], i] = np.arange(len(indices))
-            score += sum(distances < scale**2)
+            score += sum(indices >= 0)
         score -= sum(sum(result[:,i] == result[:,j]) for i in range(1,4) for j in range(i))
         if score > best_score:
             best_score, best_result = score, result
@@ -54,24 +53,35 @@ def order_cross(indices):
 
 def grid_positions(neighbors, directions):
     """returns integer grid coordinates for each point in grid"""
-    result = np.zeros((neighbors.shape[0], directions.shape[1]), np.int32)
+    best_score, best_result = 0, None
     visited = np.zeros((neighbors.shape[0],), np.bool)
+    magic = -2**31
     while not visited.all():
+        result = magic * np.ones((neighbors.shape[0], directions.shape[1]), np.int32)
+        corner = np.array((0, 0))
         seed = next(i for i, v in enumerate(visited) if not v)
         flood = [seed]
+        result[seed] = 0
+        score = 0
         while flood:
             index = flood.pop()
             visited[index] = True
+            score += 1
             for n, step in zip(neighbors[index,:], directions):
                 if n < 0:
                     continue
-                elif not visited[n]:
-                    result[n,:] = result[index] + step
+                elif result[n,0] == magic:
+                    result[n] = result[index] + step
+                    corner = np.minimum(corner, result[n])
                     flood.append(n)
                 else:
-                    assert (result[n,:] == result[index] + step).all()
+                    if not (result[n] == result[index] + step).all():
+                        score = -float("inf")
                     # print(index, result[index], "->", n, result[index] + step, "!=", result[n,:])
-    return result
+        result -= corner
+        if score > best_score:
+            best_score, best_result = score, result
+    return best_result
 
 def calibrate(img):
     imgpoints = find_corners(img)
