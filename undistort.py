@@ -2,33 +2,47 @@
 import numpy as np
 import cv2
 
-scale = 15
+scale = 75
+verbose = True
+
+def linear_gray(img):
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    return (gray / 255)**2.2
+
+def hessian(gray):
+    dy, dx = np.gradient(gray)
+    dyy, dxy = np.gradient(dy)
+    dxy, dxx = np.gradient(dx)
+    return dxx, dxy, dyy
 
 def find_corners(img):
-    """returns coordinates of maxima in the xy-derivative"""
-    gray = cv2.cvtColor(img,cv2.COLOR_BGR2GRAY).astype(np.float32)
-    gray = cv2.GaussianBlur(gray, (scale, scale), scale/5)
-    gray = np.abs(np.diff(np.diff(gray), axis=0)) / 10
-    threshold = np.quantile(gray, 0.998)
-    mask = (gray > threshold).astype(np.uint8)
+    gray = linear_gray(img)
+    gray = cv2.GaussianBlur(gray, (scale, scale), scale/3)
+    gray = gray - cv2.GaussianBlur(gray, (3*scale, 3*scale), scale)
+    cv2.imshow('gray', gray)
+    dxx, dxy, dyy = hessian(gray)
+    gray = dxy**2 - 4*dxx*dyy
+    gray = cv2.GaussianBlur(gray, (scale, scale), scale/7)
+    threshold = np.quantile(gray, 0.99)
+    cv2.imshow('discriminant', gray/threshold)
+    mask = np.uint8(gray > threshold)
     retval, labels, stats, centroids = cv2.connectedComponentsWithStats(mask)
-    # ignore 0-th component because it is the background
-    return centroids[1:].astype(np.float32)
+    return np.float32(centroids[1:])
 
 def grid_match(points, directions=4):
     """returns index to neighbors for each point in grid"""
     flann = cv2.flann_Index()
     flann.build(points, {'algorithm': 1, 'trees': 1})
-    best_score, best_result = 0, None
-    for guess in range(len(points)):
-        origin = points[guess:guess+1,:]
+    best_score, best_result = -float("inf"), None
+    for m in range(len(points)):
+        origin = points[m:m+1,:]
+        # neighbors[m, i] = n means that neighbor of points[m] in directions[i] is points[n]
         # last row in the result array represents a "no match" point
         result = -np.ones((points.shape[0] + 1, directions), np.int32)
         score = 0
         for i, n in enumerate(flann.knnSearch(origin, directions+1)[0].T[1:]):
-            if n == guess:
-                score = -float("inf")
             target = points[n]
+            cv2.arrowedLine(img, (round(origin[0,0]), round(origin[0,1])), (round(target[0,0]), round(target[0,1])), (50, 50, 200))
             shifted = points + (target - origin)
             indices, distances = flann.knnSearch(shifted, 1)
             indices[distances > scale] = -1
@@ -82,10 +96,17 @@ def grid_positions(neighbors, directions):
             best_score, best_result = score, result
     return best_result
 
-def calibrate(img, verbose=True):
+def calibrate(img):
     imgpoints = find_corners(img)
+
+    if verbose:
+        for x, y in imgpoints:
+            cv2.circle(img, (round(x), round(y)), 5, (50, 50, 200))
+        cv2.imshow('grid', img)
+        cv2.waitKey(0)
+
     directions = np.array([[-1, 0], [1, 0], [0, -1], [0, 1]])
-    neighbors = grid_match(imgpoints, directions.shape[0])
+    neighbors = grid_match(imgpoints, len(directions))
     order_cross(neighbors)
     objpoints = grid_positions(neighbors, directions)
     mask = (objpoints[:,0] >= 0)
@@ -96,8 +117,8 @@ def calibrate(img, verbose=True):
         for (x, y), (i, j) in zip(imgpoints, objpoints):
             cv2.circle(img, (round(x), round(y)), 5, (50, 50, 200))
             cv2.putText(img, f"{i}, {j}", (round(x), round(y)), cv2.FONT_HERSHEY_PLAIN, 1, (100, 150, 250))
-        cv2.imshow('img', img)
-        cv2.waitKey(1)
+        cv2.imshow('grid', img)
+        cv2.waitKey(0)
 
     objpoints = np.hstack((objpoints, np.zeros((len(objpoints),1), np.float32))).astype(np.float32)
     shape = (img.shape[1], img.shape[0])
@@ -110,6 +131,10 @@ if __name__ == "__main__":
     from pathlib import Path
     fname = argv[1]
     img = cv2.imread(fname)
+    is_portrait = img.shape[0] > img.shape[1]
+    # guess grid size, in pixels
+    scale = (img.shape[0] + img.shape[1]) / 200
+    scale = 2 * round(scale) + 1
     dist, mtx, newmtx = calibrate(img)
     print(dist)
     print(mtx)
@@ -119,7 +144,7 @@ if __name__ == "__main__":
     for fname in argv[1:]:
         img = cv2.imread(fname)
         path = Path(fname)
-        if img.shape[0] > img.shape[1]:
+        if (img.shape[0] > img.shape[1]) != is_portrait:
             img = cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
         img = cv2.remap(img, mapx, mapy, cv2.INTER_LINEAR)
         cv2.imwrite(str(directory / path.name), img)
